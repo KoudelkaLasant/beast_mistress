@@ -6,21 +6,31 @@ class GameEngine():
 	class CurrentMap():
 		def __init__(self, data):
 			self.startingData = data
+			temp_map_variables = copy.deepcopy(self.startingData["data"]) #reformat these
+			self.startingData["data"] = {}
+			for counter, x in enumerate([x for x in temp_map_variables[0]]):
+				data_type = temp_map_variables[2][counter]
+				if temp_map_variables[0][counter] not in self.startingData["data"].keys():
+					self.startingData["data"][temp_map_variables[0][counter]] = {}
+				if temp_map_variables[1][counter] not in self.startingData["data"][temp_map_variables[0][counter]].keys():
+					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = {}
+				if data_type == "intList":
+					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = [int(x) for x in temp_map_variables[3][counter].split(",") if len(x) > 0 and x.isnumeric()]
+				if data_type == "int":
+					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = int(temp_map_variables[3][counter])
+				if data_type == "bool":
+					result = self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]]
+					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = result == "TRUE"
 			self.currentData = data # later there will need to be loading states allowing for maps to change content
-			self.playerDirection = "right"
-			self.playerCoordinates = [0,0]
+			self.playerDirection = "front"
+			self.playerAction = "stand"
+			self.playerCoordinates = self.currentData["data"]["general"]["defaultPlayerStart"]
 			self.cameraFollowsPlayer = True
 			self.cameraPosition = [0,0]
 			self.playerPosition = self.convertPlayerCoordinatesToPosition()
+			self.playerMoveSpeedLookup = {"stand" : 0.5, "walk" : 0.1}
 		def convertPlayerCoordinatesToPosition(self):
 			return [self.playerCoordinates[0] * tile_width + tile_width / 2, self.playerCoordinates[1] * tile_height + tile_height / 2]
-		def playerDirectionToSourceFolderSuffix(self):
-			if self.playerDirection == "front":
-				return "front"
-			if self.playerDirection == "back":
-				return "back"
-			if self.playerDirection == "right" or self.playerDirection == "left":
-				return "side"
 	class Controller():
 		def startup():
 			Controller.keys = None
@@ -45,6 +55,10 @@ class GameEngine():
 		def handleExplore():
 			player_speed = 128
 			movement = pygame.Vector2(0, 0)
+			players_current_direction = GameEngine.currentMap.playerDirection
+			players_current_action = GameEngine.currentMap.playerAction
+			players_new_direction = ""
+			players_new_action = "stand"
 			if GameEngine.Controller.pressed["w"] or GameEngine.Controller.pressed["up"]:
 				movement.y -=1
 			if GameEngine.Controller.pressed["a"] or GameEngine.Controller.pressed["left"]:
@@ -55,8 +69,32 @@ class GameEngine():
 				movement.x +=1
 			if movement.length_squared() > 0:
 				movement = movement.normalize()
-			GameEngine.currentMap.playerPosition+= movement * player_speed * Renderer.dt
-			GameEngine.currentMap.playerCoordinates = [int(GameEngine.currentMap.playerPosition[0] // tile_width),int(GameEngine.currentMap.playerPosition[1] // tile_height)]
+			if movement[1] < 0:
+				players_new_action = "walk"
+				players_new_direction = "back"
+			if movement[1] > 0:
+				players_new_action = "walk"
+				players_new_direction = "front"
+			if movement[0] < 0:
+				players_new_action = "walk"
+				players_new_direction = "left"
+			if movement[0] > 0:
+				players_new_action = "walk"
+				players_new_direction = "right"
+			if players_new_direction == "":
+				players_new_direction = players_current_direction
+			if players_new_action == "":
+				players_new_action = players_current_action
+			if players_new_direction != players_current_direction or players_new_action != players_current_action:
+				GameEngine.currentMap.playerDirection = players_new_direction
+				GameEngine.currentMap.playerAction = players_new_action
+				Renderer.eraseSprite("protag",Renderer.render_layer_lookup["player"])
+				GameEngine.loadProtagonist()
+			projectedNewPosition = GameEngine.currentMap.playerPosition+ movement * player_speed * Renderer.dt
+			projectedNewCoordinates = [int(projectedNewPosition[0] // tile_width),int(projectedNewPosition[1] // tile_height)]
+			if "obstruction" not in GameEngine.currentMap.currentData["tiles"][projectedNewCoordinates[0]][projectedNewCoordinates[1]].split(","):
+				GameEngine.currentMap.playerPosition = projectedNewPosition
+				GameEngine.currentMap.playerCoordinates = projectedNewCoordinates
 			if GameEngine.currentMap.cameraFollowsPlayer:
 				GameEngine.currentMap.cameraPosition = Renderer.clampCamera(GameEngine.currentMap.currentData, GameEngine.currentMap.playerPosition)
 			map_width, map_height = Renderer.getMapPixelSize(GameEngine.currentMap.currentData)
@@ -84,19 +122,25 @@ class GameEngine():
 			return GameEngine.Procedure(
 				[
 				GameEngine.Event("LoadDebugMap", lambda : GameEngine.loadMap(map_name="debug", load_protag=True) or True),
+				GameEngine.Event("HandleExplore", lambda: GameEngine.Controller.handleExplore()),
 				GameEngine.Event("DebugExplore", lambda: GameEngine.Controller.handleExplore() or GameEngine.Controller.debugExplore()),
 				]
 				)
+	class Saver():
+		def setup():
+			Saver.currentSaveData = {}
 	def startup():
 		Renderer.setup()
 		GameEngine.currentMap = None
 		mode = GameSettings.get("GameMode", "mode")
 		if mode == "debug":
 			GameEngine.currentProcedure = GameEngine.ProcedureFactory.getDebugImageLoadProcedure()
+	def loadProtagonist():
+		Renderer.loadSprite(unique_id="protag", layer=Renderer.render_layer_lookup["player"], source_folder=f"assets/images/debug/protag", animated=True, animation_speed=GameEngine.currentMap.playerMoveSpeedLookup[GameEngine.currentMap.playerAction], animation_styles=["loop","bounce",], animation_finished=False, direction=GameEngine.currentMap.playerDirection,action=GameEngine.currentMap.playerAction, scaling=[1,1], x=0.5, y=0.5, pivot="feet")
 	def loadMap(map_name, load_protag):
 		GameEngine.currentMap = GameEngine.CurrentMap(ExternalDataReader.readMapData(map_name)) # will need more here to load state
 		if load_protag:
-			Renderer.loadSprite(unique_id="protag", layer=Renderer.render_layer_lookup["player"], source_folder=f"assets/images/debug/protag/{GameEngine.currentMap.playerDirectionToSourceFolderSuffix()}", animated=False, animation_speed=0, animation_style="static", animation_finished=False, is_flipped=False, scaling=1, x=0.5, y=0.5, pivot="feet")
+			GameEngine.loadProtagonist()
 		camera_position = Renderer.clampCamera(GameEngine.currentMap.currentData, GameEngine.currentMap.cameraPosition)
 		Renderer.updateMapGraphics(GameEngine.currentMap.currentData, camera_position, GameEngine.currentMap.convertPlayerCoordinatesToPosition())
 	def run():
