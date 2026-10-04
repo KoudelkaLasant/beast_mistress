@@ -19,7 +19,8 @@ class Renderer():
 			screen_width, screen_height = surface.get_size()
 			screen_x = screen_width * self.x
 			screen_y = screen_height * self.y
-			self.text.render(surface,(screen_x, screen_y), alignment = self.alignment)
+			text_width = screen_width * self.width
+			self.text.render(surface, (screen_x, screen_y), self.alignment, text_width)
 		class TextRun():
 			def __init__(self, text, colour):
 				self.text = text
@@ -88,23 +89,48 @@ class Renderer():
 				return width
 			def getHeight(self):
 				return self.font.get_height()
-			def render(self, surface, position, alignment):
-				width = self.getWidth()
-				if alignment == "centre":
-					x = position[0] - width / 2
-				if alignment == "left":
-					x = position[0]
-				y = position[1]
+			def getLines(self, max_width):
+				lines = []
+				current_line = []
+				current_width = 0
 				for run in self.runs:
 					if run is None:
-						x = position[0]
-						y += self.font.get_height()
+						lines.append(current_line)
+						current_line = []
+						current_width = 0
 						continue
-					rendered_text = self.font.render(run.text, True, run.colour)
-					drop_shadow = self.font.render(run.text, True, self.dropshadow_colour)
-					surface.blit(drop_shadow, (x,y+1))
-					surface.blit(rendered_text, (x,y))
-					x += rendered_text.get_width()
+					words = run.text.split(" ")
+					for index, word in enumerate(words):
+						if index < len(words) - 1:
+							word += " "
+						word_width = self.font.size(word)[0]
+						if current_width + word_width > max_width and current_line:
+							lines.append(current_line)
+							current_line = []
+							current_width = 0
+						current_line.append(Renderer.TextBox.TextRun(word, run.colour))
+						current_width += word_width
+				if current_line:
+					lines.append(current_line)
+				return lines
+			def render(self, surface, position, alignment, max_width):
+				lines = self.getLines(max_width)
+				y = position[1]
+				for line in lines:
+					line_width = 0
+					for run in line:
+						line_width += self.font.size(run.text)[0]
+					if alignment == "centre":
+						x = position[0] - line_width / 2
+					else:
+						x = position[0]
+					for run in line:
+						rendered_text = self.font.render(run.text, True, Renderer.font_colour_lookup[run.colour])
+						drop_shadow = self.font.render(run.text, True, self.dropshadow_colour)
+						surface.blit(drop_shadow, (x, y + 1))
+						surface.blit(rendered_text, (x, y))
+						x += rendered_text.get_width()
+					y += self.font.get_height()
 	class Sprite():
 		def __init__(self, unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot):
 			self.unique_id = unique_id
@@ -116,7 +142,6 @@ class Renderer():
 			self.direction = direction
 			self.animation_finished = animation_finished
 			self.action = action
-			self.direction = direction
 			self.x = x # normalized from 0 to 1
 			self.y = y # normalized from 0 to 1
 			self.pivot = pivot
@@ -163,6 +188,8 @@ class Renderer():
 			if self.pivot == "feet":
 				rect = Renderer.loadedTextures[unique_texture_id].get_rect(center=self.percent_position())
 				rect.y -= rect.height * 0.25
+			if self.pivot == "topleft":
+				rect = Renderer.loadedTextures[unique_texture_id].get_rect(topleft=self.percent_position())
 			Renderer.screen.blit(Renderer.loadedTextures[unique_texture_id], rect)
 	def getImage(relative_path):
 		return pygame.image.load(Renderer.getResource(relative_path))
@@ -197,7 +224,7 @@ class Renderer():
 			Renderer.textBoxes[layer][unique_id] = Renderer.TextBox(unique_id=unique_id, text=full_content, font_name=unique_font_id, default_colour=default_font_colour,dropshadow_colour=dropshadow_colour,x=x,y=y,width=width,height=height, alignment=alignment)
 		else:
 			Renderer.textBoxes[layer][unique_id].text.update_content(full_content)
-	def updateMapGraphics(map_data, camera_position, player_position, whatIsThePlayerStandingOn, whatIsThePlayerStandingInFrontOf):
+	def updateMapGraphics(map_data, camera_position, player_position, popupTextCoordinates):
 		screen_width, screen_height = Renderer.screen.get_size()
 		player_layer = Renderer.render_layer_lookup["player"]
 		tile_layer_start = Renderer.render_layer_lookup["tiles"]
@@ -223,6 +250,11 @@ class Renderer():
 				if "NONE" in objects:
 						continue
 				for counter, object_name in enumerate(objects):
+					if Renderer.doesThisTextExist("mappopuptext") and x_coordinate == popupTextCoordinates[0] and y_coordinate == popupTextCoordinates[1]:
+						textBoxWorldPosition = [x_coordinate * tile_width + tile_width / 2, (y_coordinate-2.2) * tile_height + tile_height / 2]
+						textBoxScreenPosition = Renderer.worldToScreen(textBoxWorldPosition,camera_position)
+						Renderer.textBoxes[Renderer.text_layer_lookup["mappopuptext"]]["mappopuptext"].x = textBoxScreenPosition[0]
+						Renderer.textBoxes[Renderer.text_layer_lookup["mappopuptext"]]["mappopuptext"].y = textBoxScreenPosition[1]
 					image_source_folder = f"assets/images/objects/{object_name}"
 					object_id = f"current_map_object_{counter}_{object_name}_{x_coordinate}_{y_coordinate}"
 					if player_layer not in Renderer.spriteLayers.keys() or object_id not in Renderer.spriteLayers[player_layer].keys():
@@ -230,6 +262,11 @@ class Renderer():
 					else:
 						Renderer.spriteLayers[player_layer][object_id].x = screen_position[0]
 						Renderer.spriteLayers[player_layer][object_id].y = screen_position[1]					
+	def doesThisTextExist(unique_id):
+		for x in Renderer.textBoxes.keys():
+			if unique_id in Renderer.textBoxes[x].keys():
+				return True
+		return False
 	def worldToScreen(world_position, camera_position):
 		screen_width, screen_height = Renderer.screen.get_size()
 		screen_x = (world_position[0] - camera_position[0]+ screen_width / 2)
@@ -276,13 +313,16 @@ class Renderer():
 			"red" : (255,0,0),
 			"green" : (0,255,0),
 			"blue" : (0,0,255),
+			"elegantGreen" : (129,168,114),
 		}
 		Renderer.render_layer_lookup = {
 			"tiles" : 0,
 			"player" : 100,
+			"dialogue_UI" : 200,
 		}
 		Renderer.text_layer_lookup = {
-			"mappopuptext" : 999,
+			"mappopuptext" : 110,
+			"dialogue_text" : 202,
 		}
 	def draw():
 		Renderer.screen.fill((0, 0, 0))

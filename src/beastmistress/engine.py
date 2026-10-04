@@ -9,22 +9,22 @@ class GameEngine():
 			temp_map_variables = copy.deepcopy(self.startingData["data"]) #reformat these
 			self.startingData["data"] = {}
 			for counter, x in enumerate([x for x in temp_map_variables[0]]):
+				dict_name = temp_map_variables[0][counter]
+				key_name = temp_map_variables[1][counter]
 				data_type = temp_map_variables[2][counter]
-				if temp_map_variables[0][counter] not in self.startingData["data"].keys():
-					self.startingData["data"][temp_map_variables[0][counter]] = {}
-				if temp_map_variables[1][counter] not in self.startingData["data"][temp_map_variables[0][counter]].keys():
-					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = {}
+				value = temp_map_variables[3][counter]
+				if dict_name not in self.startingData["data"].keys():
+					self.startingData["data"][dict_name] = {}
+				if key_name not in self.startingData["data"][dict_name].keys():
+					self.startingData["data"][dict_name][key_name] = {}
 				if data_type == "intList":
-					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = [int(x) for x in temp_map_variables[3][counter].split(",") if len(x) > 0 and x.isnumeric()]
+					self.startingData["data"][dict_name][key_name] = [int(x) for x in value.split(",") if len(x) > 0 and x.isnumeric()]
 				if data_type == "int":
-					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = int(temp_map_variables[3][counter])
+					self.startingData["data"][dict_name][key_name] = int(value)
 				if data_type == "bool":
-					dict_name = temp_map_variables[0][counter]
-					key_name = temp_map_variables[1][counter]
-					value = temp_map_variables[3][counter]
 					self.startingData["data"][dict_name][key_name] = value
 				if data_type == "string":
-					self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]] = self.startingData["data"][temp_map_variables[0][counter]][temp_map_variables[1][counter]]
+					self.startingData["data"][dict_name][key_name] = value
 			self.currentData = self.startingData # later there will need to be loading states allowing for maps to change content
 			self.objectCoordinatesLookup = {}
 			for x in self.currentData["objects"].keys():
@@ -35,6 +35,7 @@ class GameEngine():
 			self.playerDirection = "front"
 			self.playerAction = "stand"
 			self.playerCoordinates = self.currentData["data"]["general"]["defaultPlayerStart"]
+			self.popupTextCoordinates = [0,0]
 			self.cameraFollowsPlayer = True
 			self.cameraPosition = [0,0]
 			self.playerPosition = self.convertPlayerCoordinatesToPosition()
@@ -72,7 +73,7 @@ class GameEngine():
 			Controller.keys = None
 		def acceptUserInput():
 			GameEngine.Controller.keys = pygame.key.get_pressed()
-			GameEngine.Controller.pressed = {
+			GameEngine.Controller.pressed = { # record whatever is being held down now
 				"w" : GameEngine.Controller.keys[pygame.K_w],
 				"a" : GameEngine.Controller.keys[pygame.K_a],
 				"s" : GameEngine.Controller.keys[pygame.K_s],
@@ -81,7 +82,10 @@ class GameEngine():
 				"down" : GameEngine.Controller.keys[pygame.K_DOWN],
 				"left" : GameEngine.Controller.keys[pygame.K_LEFT],
 				"right" : GameEngine.Controller.keys[pygame.K_RIGHT],
+				"f" : GameEngine.Controller.keys[pygame.K_f],
+				"enter" : GameEngine.Controller.keys[pygame.K_RETURN],
 			}
+			GameEngine.Controller.keydownEvent = {} # record specific key presses
 		def debugUserInput():
 			pass
 			#Renderer.loadText(unique_id="debugtext", layer=1, font_name = "default", font_size = 20, full_content = str(pressed), font_colour="blue", animated=False, starting_content="", animation_speed=0)
@@ -141,15 +145,23 @@ class GameEngine():
 			half_tile_height = tile_height / 2
 			GameEngine.currentMap.playerPosition.x = max(half_tile_width,min(GameEngine.currentMap.playerPosition.x,map_width - half_tile_width))
 			GameEngine.currentMap.playerPosition.y = max(half_tile_height,min(GameEngine.currentMap.playerPosition.y,map_height - half_tile_height))
-			Renderer.updateMapGraphics(GameEngine.currentMap.currentData, GameEngine.currentMap.cameraPosition, GameEngine.currentMap.playerPosition, GameEngine.currentMap.whatIsThePlayerStandingOn(), GameEngine.currentMap.whatIsThePlayerStandingInFrontOf())
 			possibleInteractiblesInRange = GameEngine.currentMap.whatIsThePlayerStandingInFrontOf()
-			if not possibleInteractiblesInRange:
-				Renderer.eraseText(Renderer.text_layer_lookup, "mappopuptext")
+			if not possibleInteractiblesInRange and Renderer.doesThisTextExist("mappopuptext"):
+				Renderer.eraseText("mappopuptext", Renderer.text_layer_lookup["mappopuptext"])
 			else: # should only be one object at a time
 				possibleInteractiblesInRange = [x for x in possibleInteractiblesInRange if x in GameEngine.currentMap.currentData["data"].keys()]
 				for x in possibleInteractiblesInRange:
 					can_interact = GameEngine.currentMap.canThePlayerInteractWithThis(x)
-					print(can_interact)
+					if can_interact and not Renderer.doesThisTextExist("mappopuptext"):
+						message_content = GameEngine.currentMap.currentData["data"][x]["popupTextMessage"]
+						GameEngine.currentMap.popupTextCoordinates = GameEngine.currentMap.objectCoordinatesLookup[x]
+						Renderer.loadText(unique_id="mappopuptext", layer=Renderer.text_layer_lookup["mappopuptext"], font_name = "default", font_size = 16, full_content = message_content, default_font_colour="white", dropshadow_colour = "black", animated=False, starting_content="", animation_speed=0, x = 0,y=0,width=1,height=1, alignment = "centre")
+					couldStartACutscene = GameEngine.currentMap.currentData["data"][x]["talkingTriggersACutscene?"]
+					if couldStartACutscene:
+						which_cutscene = GameEngine.currentMap.currentData["data"][x]["whichCutscene?"]
+						if GameEngine.Controller.pressed["f"]:
+							GameEngine.currentProcedure = GameEngine.ProcedureFactory.loadCutscene(which_cutscene)		
+			Renderer.updateMapGraphics(GameEngine.currentMap.currentData, GameEngine.currentMap.cameraPosition, GameEngine.currentMap.playerPosition,GameEngine.currentMap.popupTextCoordinates)
 	class Event():
 		def __init__(self, type, event):
 			self.type = type
@@ -165,12 +177,35 @@ class GameEngine():
 		def __init__(self, event_list):
 			self.event_list = event_list
 	class ProcedureFactory():
+		def startup():
+			GameEngine.ProcedureFactory.rawCutsceneData = ExternalDataReader.readCutscenes()
+		def loadDialogueGraphics(portrait_name, speaker_name, speaker_colour, line):
+			Renderer.loadSprite(unique_id="speakerNameBox", layer=Renderer.render_layer_lookup["dialogue_UI"], source_folder=f"assets/images/ui/SpeakerNameBox", animated=False, animation_speed=0, animation_styles=[], animation_finished=False, direction="front",action="stand", scaling=[1,1], x=0.11, y=0.01, pivot="topleft")
+			Renderer.loadSprite(unique_id="dialogueBox", layer=Renderer.render_layer_lookup["dialogue_UI"], source_folder=f"assets/images/ui/DialogueBox", animated=False, animation_speed=0, animation_styles=[], animation_finished=False, direction="front",action="stand", scaling=[1,1], x=0.15, y=0.05, pivot="topleft")
+			Renderer.loadSprite(unique_id="speakerPortraitBackground", layer=Renderer.render_layer_lookup["dialogue_UI"]+1, source_folder=f"assets/images/ui/SpeakerBackground", animated=False, animation_speed=0, animation_styles=[], animation_finished=False, direction="front",action="stand", scaling=[1,1], x=0.11, y=0.05, pivot="topleft")
+			Renderer.loadSprite(unique_id="speakerPortrait", layer=Renderer.render_layer_lookup["dialogue_UI"]+2, source_folder=f"assets/images/objects/{portrait_name}", animated=False, animation_speed=0, animation_styles=[], animation_finished=False, direction="front",action="portrait", scaling=[1,1], x=0.11, y=0.05, pivot="topleft")
+			Renderer.loadSprite(unique_id="speakerPortraitBorder", layer=Renderer.render_layer_lookup["dialogue_UI"]+3, source_folder=f"assets/images/ui/SpeakerBox", animated=False, animation_speed=0, animation_styles=[], animation_finished=False, direction="front",action="stand", scaling=[1,1], x=0.11, y=0.05, pivot="topleft")
+			Renderer.loadText(unique_id="Speaker", layer=Renderer.text_layer_lookup["dialogue_text"], font_name = "default", font_size = 17, full_content = speaker_name, default_font_colour=speaker_colour, dropshadow_colour = "black", animated=False, starting_content="", animation_speed=0, x = 0.122,y=0.02,width=1,height=1, alignment = "left")
+			Renderer.loadText(unique_id="Dialogue", layer=Renderer.text_layer_lookup["dialogue_text"], font_name = "default", font_size = 17, full_content = line, default_font_colour="white", dropshadow_colour = "black", animated=False, starting_content="", animation_speed=0, x = 0.195,y=0.065,width=0.65,height=1, alignment = "left")
+		def loadCutscene(cutsceneName):
+			# add checks here if cutscene should depend on game state (npcs saying different things when criteria are met)
+			if cutsceneName not in GameEngine.ProcedureFactory.rawCutsceneData.keys():
+				raise Exception("There is no cutscene called " + cutsceneName)
+			lines = GameEngine.ProcedureFactory.rawCutsceneData[cutsceneName]
+			eventList = []
+			for line in lines:
+				if line["Type"] == "Dialogue":
+					eventList.append(GameEngine.Event("StartDialogue", lambda portrait=line["Portrait"], speaker=line["Speaker"], speaker_colour = line["SpeakerColour"], dialogue=line["Dialogue"]: GameEngine.ProcedureFactory.loadDialogueGraphics(portrait, speaker, speaker_colour, dialogue)))
+				if line["Type"] == "Instruction":
+					if line["Instruction"] == "ReturnToExplore":
+						eventList.append(GameEngine.Event("HandleExplore", lambda: GameEngine.Controller.handleExplore()))
+			return GameEngine.Procedure(eventList)
 		def getDebugImageLoadProcedure():
 			return GameEngine.Procedure(
 				[
 				GameEngine.Event("LoadDebugMap", lambda : GameEngine.loadMap(map_name="debug", load_protag=True) or True),
-				#GameEngine.Event("HandleExplore", lambda: GameEngine.Controller.handleExplore()),
-				GameEngine.Event("DebugExplore", lambda: GameEngine.Controller.handleExplore() or GameEngine.Controller.debugExplore()),
+				GameEngine.Event("HandleExplore", lambda: GameEngine.Controller.handleExplore()),
+				#GameEngine.Event("DebugExplore", lambda: GameEngine.Controller.handleExplore() or GameEngine.Controller.debugExplore()),
 				]
 				)
 	class Saver():
@@ -180,6 +215,7 @@ class GameEngine():
 		Renderer.setup()
 		GameEngine.currentMap = None
 		mode = GameSettings.get("GameMode", "mode")
+		GameEngine.ProcedureFactory.startup()
 		if mode == "debug":
 			GameEngine.currentProcedure = GameEngine.ProcedureFactory.getDebugImageLoadProcedure()
 	def loadProtagonist():
@@ -189,15 +225,15 @@ class GameEngine():
 		if load_protag:
 			GameEngine.loadProtagonist()
 		camera_position = Renderer.clampCamera(GameEngine.currentMap.currentData, GameEngine.currentMap.cameraPosition)
-		Renderer.updateMapGraphics(GameEngine.currentMap.currentData, camera_position, GameEngine.currentMap.convertPlayerCoordinatesToPosition(), GameEngine.currentMap.whatIsThePlayerStandingOn(), GameEngine.currentMap.whatIsThePlayerStandingInFrontOf())
+		Renderer.updateMapGraphics(GameEngine.currentMap.currentData, camera_position, GameEngine.currentMap.convertPlayerCoordinatesToPosition(), GameEngine.currentMap.popupTextCoordinates)
 	def run():
 		fps = GameSettings.get("DisplaySettings", "fps")
 		while Renderer.running:
 			Renderer.dt = Renderer.clock.tick(fps) / 1000.0
 			GameEngine.Controller.acceptUserInput()
-			GameEngine.currentProcedure.run()
 			for event in pygame.event.get():
 				if event.type == pygame.QUIT:
 					Renderer.running = False
+			GameEngine.currentProcedure.run()
 			Renderer.draw()
 		

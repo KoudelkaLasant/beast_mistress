@@ -9,6 +9,7 @@ from pathlib import Path
 from configparser import ConfigParser
 import ctypes
 import pandas as pd
+import openpyxl
 import json
 
 tile_width = 32
@@ -27,6 +28,17 @@ class ExternalDataReader():
 	def readMapData(map_name):
 		source = ExternalDataReader.fetch(os.path.join("assets/maps", map_name + ".xlsx"))
 		return pd.read_excel(source, sheet_name=None, header=None)
+	def readCutscenes():
+		source = ExternalDataReader.fetch(os.path.join("assets/data/cutscenes.xlsx"))
+		workbook = openpyxl.load_workbook(source, data_only=True)
+		results = {}
+		for sheet in workbook.worksheets:
+			headers = [cell.value for cell in sheet[1]]
+			rows = []
+			for row in sheet.iter_rows(min_row=2, values_only=True):
+				rows.append(dict(zip(headers, row)))
+			results[sheet.title] = rows
+		return results
 		
 
 	
