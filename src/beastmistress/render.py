@@ -2,21 +2,109 @@ from external_imports import *
 from settings import GameSettings
 
 class Renderer():
-	class Text():
-		def __init__(self, unique_id, unique_font_id, full_content, font_colour, animated, starting_content, animation_speed):
+	class TextBox():
+		def __init__(self, unique_id, text, font_name, default_colour, dropshadow_colour, x, y, width, height, alignment):
 			self.unique_id = unique_id
-			self.unique_font_id = unique_font_id
-			self.full_content = full_content
-			self.font_colour = font_colour
-			self.animated = animated
-			self.starting_content = starting_content
-			self.animation_speed = animation_speed
+			self.text = Renderer.TextBox.Text(text, font_name, default_colour, dropshadow_colour)
+			self.font_name = font_name
+			self.default_colour = default_colour
+			self.dropshadow_colour = dropshadow_colour
+			self.x = x
+			self.y = y
+			self.width = width
+			self.height = height
+			self.alignment = alignment
 		def render(self):
-			colour = Renderer.font_colour_lookup[self.font_colour]
-			text = Renderer.loadedFonts[self.unique_font_id].render(self.full_content, True, colour)
-			rect = text.get_rect()
-			rect.topleft = (0,0)
-			Renderer.screen.blit(text, rect)
+			surface = Renderer.screen
+			screen_width, screen_height = surface.get_size()
+			screen_x = screen_width * self.x
+			screen_y = screen_height * self.y
+			self.text.render(surface,(screen_x, screen_y), alignment = self.alignment)
+		class TextRun():
+			def __init__(self, text, colour):
+				self.text = text
+				self.colour = colour
+		class Text():
+			def __init__(self, text_content, font_name, default_colour, dropshadow_colour):
+				self.text_content = text_content
+				self.font_name = font_name
+				self.font = Renderer.loadedFonts[self.font_name]
+				self.default_colour = default_colour
+				self.dropshadow_colour =dropshadow_colour
+				self.runs = []
+				self.parse()
+			def update_content(self, text_content):
+				self.text_content = text_content
+				self.parse()
+			def parse(self):
+				self.runs.clear()
+				text = self.text_content
+				current_colour = self.default_colour
+				buffer = ""
+				colour_stack = []
+				index = 0
+				while index < len(text):
+					if text.startswith("<br>",index):
+						if buffer:
+							self.runs.append(Renderer.TextBox.TextRun(buffer, current_colour))
+							buffer = ""
+						self.runs.append(None)
+						index += len("<br>")
+						continue
+					if text.startswith("<colour=", index):
+						tag_end = text.find(">", index)
+						if tag_end == -1:
+							buffer += text[index:]
+							break
+						if buffer:
+							self.runs.append(Renderer.TextBox.TextRun(buffer,current_colour))
+							buffer = ""
+							colour_name = text[index + len("<colour="):tag_end]
+							colour = Renderer.font_colour_lookup[colour_name]
+							colour_stack.append(current_colour)
+							current_colour = colour
+							index = tag_end + 1
+							continue
+					if text.startswith("</colour>", index):
+						if buffer:
+							self.runs.append(Renderer.TextBox.TextRun(buffer, current_colour))
+							buffer = ""
+						if colour_stack:
+							current_colour = colour_stack.pop()
+						else:
+							current_colour = self.default_colour
+						index += len("</colour>")
+						continue
+					buffer += text[index]
+					index +=1
+				if buffer:
+					self.runs.append(Renderer.TextBox.TextRun(buffer, current_colour))
+			def getWidth(self):
+				width = 0
+				for run in self.runs:
+					if run is None:
+						continue
+					width += self.font.size(run.text)[0]
+				return width
+			def getHeight(self):
+				return self.font.get_height()
+			def render(self, surface, position, alignment):
+				width = self.getWidth()
+				if alignment == "centre":
+					x = position[0] - width / 2
+				if alignment == "left":
+					x = position[0]
+				y = position[1]
+				for run in self.runs:
+					if run is None:
+						x = position[0]
+						y += self.font.get_height()
+						continue
+					rendered_text = self.font.render(run.text, True, run.colour)
+					drop_shadow = self.font.render(run.text, True, self.dropshadow_colour)
+					surface.blit(drop_shadow, (x,y+1))
+					surface.blit(rendered_text, (x,y))
+					x += rendered_text.get_width()
 	class Sprite():
 		def __init__(self, unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot):
 			self.unique_id = unique_id
@@ -92,20 +180,24 @@ class Renderer():
 			print(f"Warning: Tried to erase sprite {unique_id} {layer} but it's not there.")
 			return
 		del Renderer.spriteLayers[layer][unique_id]
+	def eraseText(unique_id, layer):
+		if layer not in Renderer.textBoxes.keys() or unique_id not in Renderer.textBoxes[layer].keys():
+			return
+		del Renderer.textBoxes[layer][unique_id]
 	def loadFont(unique_id, font_name, font_size):
 		path_to_font = Renderer.getResource("assets/fonts/" + Renderer.font_lookup[font_name])
 		Renderer.loadedFonts[unique_id] = pygame.font.Font(path_to_font, font_size)
-	def loadText(unique_id, layer, font_name, font_size, full_content,font_colour,animated,starting_content,animation_speed):
+	def loadText(unique_id, layer, font_name, font_size, full_content,default_font_colour,dropshadow_colour,animated,starting_content,animation_speed, x,y,width,height,alignment):
 		unique_font_id = font_name + "_" + str(font_size)
 		if unique_font_id not in Renderer.loadedFonts:
 			Renderer.loadFont(unique_font_id, font_name, font_size)
-		if layer not in Renderer.texts.keys():
-			Renderer.texts[layer] = {}
-		if unique_id not in Renderer.texts[layer].keys():
-			Renderer.texts[layer][unique_id] = Renderer.Text(unique_id=unique_id, unique_font_id=unique_font_id, full_content=full_content,font_colour=font_colour,animated=animated,starting_content=starting_content,animation_speed=animation_speed)
+		if layer not in Renderer.textBoxes.keys():
+			Renderer.textBoxes[layer] = {}
+		if unique_id not in Renderer.textBoxes[layer].keys():
+			Renderer.textBoxes[layer][unique_id] = Renderer.TextBox(unique_id=unique_id, text=full_content, font_name=unique_font_id, default_colour=default_font_colour,dropshadow_colour=dropshadow_colour,x=x,y=y,width=width,height=height, alignment=alignment)
 		else:
-			Renderer.texts[layer][unique_id].full_content = full_content
-	def updateMapGraphics(map_data, camera_position, player_position):
+			Renderer.textBoxes[layer][unique_id].text.update_content(full_content)
+	def updateMapGraphics(map_data, camera_position, player_position, whatIsThePlayerStandingOn, whatIsThePlayerStandingInFrontOf):
 		screen_width, screen_height = Renderer.screen.get_size()
 		player_layer = Renderer.render_layer_lookup["player"]
 		tile_layer_start = Renderer.render_layer_lookup["tiles"]
@@ -171,9 +263,10 @@ class Renderer():
 		Renderer.running = True
 		Renderer.clock = pygame.time.Clock()
 		Renderer.dt = None
+		pygame.mouse.set_visible(False)
 		Renderer.spriteLayers = {}
 		Renderer.loadedTextures = {}
-		Renderer.texts = {}
+		Renderer.textBoxes = {}
 		Renderer.loadedFonts = {}
 		Renderer.font_lookup = {
 			"default" : "Edwardian Medium Std Regular.otf",
@@ -188,18 +281,21 @@ class Renderer():
 			"tiles" : 0,
 			"player" : 100,
 		}
+		Renderer.text_layer_lookup = {
+			"mappopuptext" : 999,
+		}
 	def draw():
 		Renderer.screen.fill((0, 0, 0))
-		layers_that_have_anything = set(list(Renderer.spriteLayers.keys()) + list(Renderer.texts.keys()))
+		layers_that_have_anything = set(list(Renderer.spriteLayers.keys()) + list(Renderer.textBoxes.keys()))
 		for layer in sorted(list(layers_that_have_anything)):
 			if layer in Renderer.spriteLayers.keys():
 				sorted_by_y_axis = list(Renderer.spriteLayers[layer].values())
 				sorted_by_y_axis.sort(key=lambda x: x.y)
 				for x in sorted_by_y_axis:
 					x.render()
-			if layer in Renderer.texts.keys():
-				for unique_id in Renderer.texts[layer].keys():
-					Renderer.texts[layer][unique_id].render()
+			if layer in Renderer.textBoxes.keys():
+				for unique_id in Renderer.textBoxes[layer].keys():
+					Renderer.textBoxes[layer][unique_id].render()
 		pygame.display.flip()
 
 			
