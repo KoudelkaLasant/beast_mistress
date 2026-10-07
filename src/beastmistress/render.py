@@ -61,7 +61,7 @@ class Renderer():
 							self.runs.append(Renderer.TextBox.TextRun(buffer,current_colour))
 							buffer = ""
 							colour_name = text[index + len("<colour="):tag_end]
-							colour = Renderer.font_colour_lookup[colour_name]
+							colour = colour_name
 							colour_stack.append(current_colour)
 							current_colour = colour
 							index = tag_end + 1
@@ -122,7 +122,9 @@ class Renderer():
 						line_width += self.font.size(run.text)[0]
 					if alignment == "centre":
 						x = position[0] - line_width / 2
-					else:
+					if alignment == "right":
+						x = position[0] - line_width
+					if alignment == "left":
 						x = position[0]
 					for run in line:
 						rendered_text = self.font.render(run.text, True, Renderer.font_colour_lookup[run.colour])
@@ -132,9 +134,12 @@ class Renderer():
 						x += rendered_text.get_width()
 					y += self.font.get_height()
 	class Sprite():
-		def __init__(self, unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot):
+		def __init__(self, unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot, opacity):
 			self.unique_id = unique_id
 			self.layer = layer
+			self.true_direction = direction
+			if direction == "left":
+				direction = "right" # flip later
 			self.source_folder = source_folder + "/" + direction + "/" + action + "/"
 			self.animated = animated
 			self.animation_speed = animation_speed
@@ -142,10 +147,13 @@ class Renderer():
 			self.direction = direction
 			self.animation_finished = animation_finished
 			self.action = action
+			self.scaling = scaling
 			self.x = x # normalized from 0 to 1
 			self.y = y # normalized from 0 to 1
+			self.opacity = opacity
 			self.pivot = pivot
 			self.frame_locations = sorted(list(Path(Renderer.getResource(self.source_folder)).iterdir()))
+			self.xCropFromLeftPercentage = 1 
 			if not self.frame_locations:
 				raise Exception("No animation frames have been provided for the image at " + self.source_folder)
 			if "bounce" in self.animation_styles:
@@ -176,27 +184,34 @@ class Renderer():
 					self.current_frame = 0
 				if "single" in self.animation_styles and self.current_frame == self.how_many_frames:
 					self.current_frame -=1
+				if "fadein" in self.animation_styles:
+					self.opacity+=2
+					if self.opacity > 255:
+						self.opacity = 255
 		def render(self):
 			self.animation_tick()
-			unique_texture_id = self.source_folder + "_" + str(self.current_frame)
+			unique_texture_id = self.source_folder + "_" + self.true_direction + "_" + str(self.current_frame)
 			if unique_texture_id not in Renderer.loadedTextures.keys():
 				Renderer.loadedTextures[unique_texture_id] = Renderer.getImage(self.frame_locations[self.current_frame])
-				if self.direction == "left":
+				if self.true_direction == "left":
 					Renderer.loadedTextures[unique_texture_id] = pygame.transform.flip(Renderer.loadedTextures[unique_texture_id],True,False)
+			to_render = Renderer.loadedTextures[unique_texture_id]
+			to_render = pygame.transform.scale(to_render, (int(to_render.get_width() * self.scaling[0]), int(to_render.get_height() * self.scaling[1])))
 			if self.pivot == "centre":
-				rect = Renderer.loadedTextures[unique_texture_id].get_rect(center=self.percent_position())
+				rect = to_render.get_rect(center=self.percent_position())
 			if self.pivot == "feet":
-				rect = Renderer.loadedTextures[unique_texture_id].get_rect(center=self.percent_position())
+				rect = to_render.get_rect(center=self.percent_position())
 				rect.y -= rect.height * 0.25
 			if self.pivot == "topleft":
-				rect = Renderer.loadedTextures[unique_texture_id].get_rect(topleft=self.percent_position())
-			Renderer.screen.blit(Renderer.loadedTextures[unique_texture_id], rect)
+				rect = to_render.get_rect(topleft=self.percent_position())
+			to_render.set_alpha(self.opacity)
+			Renderer.screen.blit(to_render, rect)
 	def getImage(relative_path):
 		return pygame.image.load(Renderer.getResource(relative_path))
 	def getResource(relative_path):
 		return ExternalDataReader.fetch(relative_path)
-	def loadSprite(unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot):
-		result = Renderer.Sprite(unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot)
+	def loadSprite(unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot, opacity):
+		result = Renderer.Sprite(unique_id, layer, source_folder, animated, animation_speed, animation_styles, animation_finished, direction, action, scaling, x, y, pivot, opacity)
 		if layer not in Renderer.spriteLayers.keys():
 			Renderer.spriteLayers[layer] = {}
 		if unique_id in Renderer.spriteLayers[layer]:
@@ -211,6 +226,10 @@ class Renderer():
 		if layer not in Renderer.textBoxes.keys() or unique_id not in Renderer.textBoxes[layer].keys():
 			return
 		del Renderer.textBoxes[layer][unique_id]
+	def eraseAllSpritesTextsAndTextures():
+		Renderer.spriteLayers = {}
+		Renderer.loadedTextures = {}
+		Renderer.textBoxes = {}
 	def loadFont(unique_id, font_name, font_size):
 		path_to_font = Renderer.getResource("assets/fonts/" + Renderer.font_lookup[font_name])
 		Renderer.loadedFonts[unique_id] = pygame.font.Font(path_to_font, font_size)
@@ -243,7 +262,7 @@ class Renderer():
 					world_position = [x_coordinate * tile_width + tile_width / 2,y_coordinate * tile_height + tile_height / 2]
 					screen_position = Renderer.worldToScreen(world_position,camera_position)
 					if current_layer not in Renderer.spriteLayers.keys() or tile_id not in Renderer.spriteLayers[current_layer].keys():
-						Renderer.loadSprite(unique_id=tile_id, layer=current_layer,source_folder=image_source_folder,animated=True,animation_speed=1,animation_styles=["loop","bounce","slightlyrandomtiming"],animation_finished=False,direction="front", action="stand",scaling=[1,1],x=screen_position[0], y=screen_position[1], pivot="centre")
+						Renderer.loadSprite(unique_id=tile_id, layer=current_layer,source_folder=image_source_folder,animated=True,animation_speed=1,animation_styles=["loop","bounce","slightlyrandomtiming"],animation_finished=False,direction="front", action="stand",scaling=[1,1],x=screen_position[0], y=screen_position[1], pivot="centre", opacity=255)
 					else:
 						Renderer.spriteLayers[current_layer][tile_id].x = screen_position[0]
 						Renderer.spriteLayers[current_layer][tile_id].y = screen_position[1]
@@ -258,13 +277,18 @@ class Renderer():
 					image_source_folder = f"assets/images/objects/{object_name}"
 					object_id = f"current_map_object_{counter}_{object_name}_{x_coordinate}_{y_coordinate}"
 					if player_layer not in Renderer.spriteLayers.keys() or object_id not in Renderer.spriteLayers[player_layer].keys():
-						Renderer.loadSprite(unique_id=object_id, layer=player_layer,source_folder=image_source_folder,animated=True,animation_speed=0.8,animation_styles=["loop","bounce","slightlyrandomtiming"],animation_finished=False,direction="front", action="stand",scaling=[1,1],x=screen_position[0], y=screen_position[1], pivot="feet")
+						Renderer.loadSprite(unique_id=object_id, layer=player_layer,source_folder=image_source_folder,animated=True,animation_speed=0.8,animation_styles=["loop","bounce","slightlyrandomtiming"],animation_finished=False,direction="front", action="stand",scaling=[1,1],x=screen_position[0], y=screen_position[1], pivot="feet",opacity=255)
 					else:
 						Renderer.spriteLayers[player_layer][object_id].x = screen_position[0]
 						Renderer.spriteLayers[player_layer][object_id].y = screen_position[1]					
 	def doesThisTextExist(unique_id):
 		for x in Renderer.textBoxes.keys():
 			if unique_id in Renderer.textBoxes[x].keys():
+				return True
+		return False
+	def doesThisSpriteExist(unique_id):
+		for x in Renderer.spriteLayers.keys():
+			if unique_id in Renderer.spriteLayers[x].keys():
 				return True
 		return False
 	def worldToScreen(world_position, camera_position):
@@ -304,6 +328,7 @@ class Renderer():
 		Renderer.spriteLayers = {}
 		Renderer.loadedTextures = {}
 		Renderer.textBoxes = {}
+		Renderer.topLayerRenders = [] # for pixel-level manipulated images like transitions
 		Renderer.loadedFonts = {}
 		Renderer.font_lookup = {
 			"default" : "Edwardian Medium Std Regular.otf",
@@ -319,10 +344,12 @@ class Renderer():
 			"tiles" : 0,
 			"player" : 100,
 			"dialogue_UI" : 200,
+			"CombatBackground" : 1,
 		}
 		Renderer.text_layer_lookup = {
 			"mappopuptext" : 110,
 			"dialogue_text" : 202,
+			"combat_text" : 10,
 		}
 	def draw():
 		Renderer.screen.fill((0, 0, 0))
@@ -336,6 +363,12 @@ class Renderer():
 			if layer in Renderer.textBoxes.keys():
 				for unique_id in Renderer.textBoxes[layer].keys():
 					Renderer.textBoxes[layer][unique_id].render()
+		for x in Renderer.topLayerRenders:
+			if type(x) == pygame.Surface:
+				Renderer.screen.blit(x, (0,0))
+			if type(x) == dict:
+				rect = x["surface"].get_rect(center=x["position"])
+				Renderer.screen.blit(x["surface"], rect)
 		pygame.display.flip()
 
 			
