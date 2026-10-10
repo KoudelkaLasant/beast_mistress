@@ -72,7 +72,20 @@ class ExternalDataReader():
 				beastSpecies = speciesName
 				beastLookupByName[beastName] = {"name" : beastName, "elements" : beastElements, "species" : beastSpecies}
 		return speciesStats, beastLookupByName
-		
+	def readElements():
+		source = ExternalDataReader.fetch(os.path.join(f"assets/data/elements.xlsx"))
+		workbook = openpyxl.load_workbook(source, data_only=True)
+		worksheet = workbook.worksheets[0]
+		elements = [cell.value for cell in worksheet[1][1:]]
+		element_matchups = {}
+		for row in worksheet.iter_rows(min_row=2, values_only=True):
+			attacking_element = row[0]
+			matchups = row[1:]
+			element_matchups[attacking_element] = {
+				defending_element: matchup
+				for defending_element, matchup in zip(elements, matchups)
+			}
+		return element_matchups
 		
 
 	

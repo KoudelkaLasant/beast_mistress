@@ -9,7 +9,9 @@ class GameSettings():
 				"height" : 800,
 				"width" : 600,
 				"fps" : 24,
-			}
+			},
+			"Flags":
+				{"verbosecombat" : False},
 		}
 		GameSettings.path_to_ini = os.path.join(os.path.dirname(__file__), "beastmistress.ini")
 		GameSettings.read_settings()
@@ -22,5 +24,11 @@ class GameSettings():
 				for key in GameSettings.startupSettings[section].keys():
 					if GameSettings.startupSettings[section][key].isnumeric():
 						GameSettings.startupSettings[section][key] = int(GameSettings.startupSettings[section][key])
+					else:
+						if GameSettings.startupSettings[section][key].lower() == "true":
+							GameSettings.startupSettings[section][key] = True
+						else:
+							if GameSettings.startupSettings[section][key].lower() == "false":
+								GameSettings.startupSettings[section][key] = True
 	def get(type, setting_name):	
 		return GameSettings.startupSettings[type][setting_name]

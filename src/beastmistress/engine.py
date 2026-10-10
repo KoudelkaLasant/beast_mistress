@@ -8,16 +8,151 @@ class GameEngine():
 			GameEngine.Combat.combatantData = ExternalDataReader.readDefault("combatants")
 			GameEngine.Combat.skillData = ExternalDataReader.readDefault("skills")
 			GameEngine.Combat.speciesStats, GameEngine.Combat.beastLookupByName = ExternalDataReader.readBeasts()
+			GameEngine.Combat.stringData = ExternalDataReader.readDefault("combatStrings")
+			GameEngine.Combat.elementData = ExternalDataReader.readElements()
 		class BattleInstance():
 			def __init__(self, allies, opponents):
-				self.allies = allies
-				self.opponents = opponents
-				self.turnCounter = 1
+				self.teams = {"allies" : allies, "opponents" : opponents}
+				self.turnCounter = 0
+				self.messageHistory = []
+				self.combat_finished = False
+				self.accepting_player_input = False
+				self.handling_animation = False
+				self.showing_a_new_message = False
+				self.currentTurnOrder = []
+			def nextTurn(self):
+				self.turnCounter += 1
+				self.roundCounter = 0
+				if self.turnCounter == 1:
+					self.messageHistory.append(self.composeCombatMessage("CombatStart"))
+					self.messageHistory.append(self.composeCombatMessage("WhichRound", {"_X" : str(self.turnCounter)}))
+				self.decideHowToStartTheTurn()
+				self.runNextRoundOfThisTurn()
+			def runNextRoundOfThisTurn(self):
+				whoseGo = self.currentTurnOrder[self.roundCounter]
+				if list(whoseGo.keys())[0] == "PLAYERNAME":
+					self.waitingForPlayerChoice = True
+				else:
+					self.waitingForPlayerChoice = False
+					self.AI_MakeDecision()
+			def AI_MakeDecision(self):
+				messagesToShow = []
+				verbose = False
+				if GameSettings.get("Flags","verbosecombat"):
+					verbose = True
+				whoAmI = self.currentTurnOrder[self.roundCounter]
+				myName = whoAmI["owner"]
+				myDisplayName = GameEngine.Combat.combatantData[myName]["DisplayName"]
+				myTeam = whoAmI["team"]
+				otherTeam = "allies" if myTeam == "opponents" else "opponents"
+				whichBeastOfMineIsInPlayIndex = self.teams[myTeam].beastsOutInTheField[myName]
+				whichBeastOfMineIsInPlay = self.teams[myTeam].beastInstances[myName][whichBeastOfMineIsInPlayIndex]
+				ownersOfBeastsInPlayOnOtherTeam = list(self.teams[otherTeam].beastInstances.keys())
+				allOfMyBeasts = self.teams[myTeam].beastInstances[myName]
+				messagesToShow.append(self.composeCombatMessage(uniqueID = "TheyAreThinking", replacements={"_THISOWNER" : myName, "_THISTEAM" : myTeam[0].upper() + myTeam[1:]}))
+				possibleChoices = []
+				for skill in whichBeastOfMineIsInPlay.data["skills"]:
+					if skill.canThisSkillBeUsed(whichBeastOfMineIsInPlay):
+						possibleChoices.append({"choiceName" : "USESKILL", "skillName" : skill.name})
+				for otherBeast in [x for x in self.teams[myTeam].beastInstances[myName].keys() if x != whichBeastOfMineIsInPlayIndex and self.teams[myTeam].beastInstances[myName][x].data["stats"]["alive"]]:
+					possibleChoices.append({"choiceName" : "SWAPBEAST", "beastIndex" : otherBeast})
+				if verbose:
+					allTheOptions = ""
+					for skillChoice in [x for x in possibleChoices if x["choiceName"] == "USESKILL"]:
+						allTheOptions += self.composeCombatMessage(uniqueID = "UseThisSkill", replacements = {"_SKILLNAME" : skillChoice["skillName"]})
+					for otherBeastThatIsAlive in [x for x in possibleChoices if x["choiceName"] == "SWAPBEAST"]:
+						otherBeastName = self.teams[myTeam].beastInstances[myName][otherBeastThatIsAlive["beastIndex"]].data["name"]
+						allTheOptions += self.composeCombatMessage(uniqueID = "SwapToThis", replacements = {"_BEASTNAME" : otherBeastName})
+					messagesToShow.append(self.composeCombatMessage(uniqueID = "TheyHaveTheseOptions", replacements={"_THISOWNER" : myName, "_THEOPTIONS" : allTheOptions}))
+					GameEngine.Combat.currentBattle.messageHistory += messagesToShow
+				verboseSkillTargetMessage = ""
+				for counter, choice in enumerate(possibleChoices):
+					if choice["choiceName"] == "USESKILL":
+						skillType = skill.defaultData["Type"]
+						skillName = skill.defaultData["UniqueID"]
+						validTargetsForThisSkill = skill.getValidTargetsForThisSkill(beastIndex = whichBeastOfMineIsInPlayIndex, owner = myName, myTeamName = myTeam, otherTeamName = otherTeam, allBeasts = self.teams)
+						if validTargetsForThisSkill:
+							possibleChoices[counter]["probability"] = 100
+						if verbose:
+							verboseSkillTargetMessage += skillName + ", "
+				if verbose:
+					messagesToShow.append(self.composeCombatMessage(uniqueID = "ThinkingAboutValidTargets", replacements={"_LISTOFSKILLSWITHVALIDTARGETS" : verboseSkillTargetMessage}))
+						
+			def composeCombatMessage(self, uniqueID, replacements = {}):
+				base_message = " " + copy.deepcopy(GameEngine.Combat.stringData[uniqueID]["Text"])
+				base_message = base_message.replace("_PLAYER", "<colour=combatHighlight>" + GameEngine.Saver.currentSaveData["PlayerName"] + "</colour>")
+				opponent_ID = list(self.teams["opponents"].beastInstances.keys())[0]
+				base_message = base_message.replace("_OPPONENT", "<colour=combatHighlight>" + GameEngine.Combat.combatantData[opponent_ID]["DisplayName"] + "</colour>")
+				for r in replacements.keys():
+					if r == "_THISOWNER":
+						if replacements[r] == "PLAYERNAME":
+							base_message = base_message.replace(r, "<colour=combatHighlight>" + GameEngine.Saver.currentSaveData["PlayerName"] + "</colour>")
+						else:
+							base_message = base_message.replace(r, "<colour=combatHighlight>" + GameEngine.Combat.combatantData[replacements[r]]["DisplayName"] + "</colour>")
+					else:
+						base_message = base_message.replace(r, "<colour=combatHighlight>" + replacements[r] + "</colour>")
+				return base_message
+			def compileLatestMessages(self):
+				maxMessages = 6
+				result = ""
+				toTakeFrom = copy.deepcopy(self.messageHistory)
+				if len(toTakeFrom) > maxMessages:
+					toTakeFrom = toTakeFrom[-1 * maxMessages:]
+				for x in toTakeFrom:
+					result += x + " <br> "
+				return result
+			def decideHowToStartTheTurn(self):
+				beastsOutInTheField = []
+				beastLookup = {}
+				for team in self.teams.keys():
+					for owner in self.teams[team].beastInstances.keys():
+						whichBeast = {"owner" : owner, "beast" : self.teams[team].beastInstances[owner][self.teams[team].beastsOutInTheField[owner]], "team" : team}
+						beastLookup[owner] = whichBeast["beast"].data["name"]
+						beastsOutInTheField.append(whichBeast)
+				poolOfSpeedContestants = copy.deepcopy(beastsOutInTheField)
+				already_decided = []
+				decided_order = []
+				toss_messages = []
+				how_many_tosses_to_decide = 0
+				while len(decided_order) < len(beastsOutInTheField):
+					poolOfSpeedContestants = [x for x in beastsOutInTheField if x["owner"]+x["beast"].data["name"] not in already_decided]
+					if len(poolOfSpeedContestants) == 1:
+						decided_order.append(poolOfSpeedContestants[0])
+						if len(beastsOutInTheField) == 2:
+							toss_messages.append(self.composeCombatMessage(uniqueID="SpeedThrowFinal1", replacements={"_THISBEAST" : poolOfSpeedContestants[0]["beast"].data["name"], "_THISOWNER" : poolOfSpeedContestants[0]["owner"]}))
+						break
+					values = {}
+					chanceToWinThrow = {}
+					total = 0
+					for node in poolOfSpeedContestants:
+						owner = node["owner"]
+						speed = node["beast"].data["stats"]["Celerity"]
+						values[owner]=speed
+						total += speed
+					for node in poolOfSpeedContestants:
+						owner = node["owner"]
+						chanceToWinThrow[owner] = str(int(round(values[owner] / total * 100,0))) + "%"
+						toss_messages.append(self.composeCombatMessage(uniqueID="SpeedThrowGeneric", replacements={"_THISBEAST" : node["beast"].data["name"], "_THISOWNER" : owner, "_SPEEDCHANCE" : str(chanceToWinThrow[owner])}))
+					roll = random.randint(1, total - 1)
+					current = 1
+					for key, value in values.items():
+						current += value
+						if roll <= current:
+							decided_order.append([x for x in poolOfSpeedContestants if x["owner"] == key][0])
+							how_many_tosses_to_decide +=1
+							toss_messages.append(self.composeCombatMessage(f"SpeedThrow{how_many_tosses_to_decide}", replacements={"_THISBEAST" : beastLookup[key], "_THISOWNER" : key, "_SPEEDROLL" : f"{roll}/{total}"}))#
+							already_decided.append(key + beastLookup[key])
+							break
+				GameEngine.Combat.currentBattle.messageHistory += toss_messages
+				GameEngine.Combat.currentBattle.currentTurnOrder = decided_order
 		class TeamInstance():
 			def __init__(self, players_to_beast_dict):
 				self.teamStartingData = players_to_beast_dict # support multibattles
 				self.beastInstances = {}
 				self.loadBeastInstances()
+				self.beastsOutInTheField = {}
+				for owner in self.beastInstances.keys():
+					self.beastsOutInTheField[owner] = "1"
 			def loadBeastInstances(self):
 				for combatant in self.teamStartingData.keys():
 					self.beastInstances[combatant] = {}
@@ -25,30 +160,89 @@ class GameEngine():
 						beast = self.teamStartingData[combatant][beast_index]
 						beast_index = beast_index
 						beast_name = beast["name"]
-						beast_skills = beast["skills"]
+						beast_skills = []
+						for skill_name in beast["skills"]:
+							beast_skills.append(GameEngine.Combat.SkillInstance(name = skill_name, defaultData = GameEngine.Combat.skillData[skill_name]))
 						beast_elements = GameEngine.Combat.beastLookupByName[beast_name]["elements"]
 						beast_species = GameEngine.Combat.beastLookupByName[beast_name]["species"]
 						beast_stats = self.spawnStats(beast_name, beast_species)
-						self.beastInstances[combatant][beast_index] = {"name" : beast_name, "skills" : beast_skills, "elements" : beast_elements, "species" : beast_species, "stats" : beast_stats}
+						self.beastInstances[combatant][beast_index] = GameEngine.Combat.BeastInstance(data={"name" : beast_name, "skills" : beast_skills, "elements" : beast_elements, "species" : beast_species, "stats" : beast_stats})
 			def spawnStats(self, beast_name, beast_species):
 				results = GameEngine.Combat.speciesStats[beast_species]
-				base_life = 100
+				base_life = 60
 				base_energy = 20
 				results["LifeTotal"] = int(round(base_life + ((base_life / 100) * results["Vitality"]),0))
-				results["EnergyTotal"] = int(round(base_life + ((base_energy / 100) * results["Piety"]),0))
+				results["EnergyTotal"] = int(round(base_energy + ((base_energy / 100) * results["Piety"]),0))
 				results["LifeCurrent"] = results["LifeTotal"]
 				results["EnergyCurrent"] = results["EnergyTotal"]
+				results["alive"] = True
+				results["CurrentEffects"] = {}
 				return results
 		class SkillInstance():
-			def __init__(self, unique_id):
-				self.unique_id = unique_id
-		class BeastInstance():
-			def __init__(self, unique_id, name, team, stats, skills):
-				self.unique_id = unique_id
+			def __str__(self):
+				return str(self.defaultData) + " Rounds Until Recharged: " + str(self.roundsUntilRecharged)
+			def __init__(self, name, defaultData):
 				self.name = name
-				self.team = team
+				self.defaultData = defaultData
+				self.roundsUntilRecharged = 0
+			def canThisSkillBeUsed(self, beastInstance):
+				energyCost = self.defaultData["Activation"]
+				currentEnergy = beastInstance.data["stats"]["EnergyCurrent"]
+				recharge = self.defaultData["Recharge"]
+				roundsUntilRecharged = self.roundsUntilRecharged
+				if energyCost > currentEnergy:
+					return False
+				if roundsUntilRecharged > 0:
+					return False
+				for effect in beastInstance.data["stats"]["CurrentEffects"].keys():
+					pass # see if any effects prevent this skill from being used
+				return True
+			def getValidTargetsForThisSkill(self, beastIndex, owner, myTeamName, otherTeamName, allBeasts):
+				results = [] # {owner to beast index}
+				skillType = self.defaultData["Type"]
+				allAllies = []
+				allEnemies = []
+				for allyOwner in allBeasts[myTeamName].beastInstances.keys():
+					for allyBeast in allBeasts[myTeamName].beastInstances[allyOwner].keys():
+						allAllies.append({"whichTeam" : myTeamName, "owner" : allyOwner, "beastIndex" : allyBeast})
+				for enemyOwner in allBeasts[otherTeamName].beastInstances.keys():
+						for enemyBeast in allBeasts[otherTeamName].beastInstances[enemyOwner].keys():
+							allEnemies.append({"whichTeam" : otherTeamName, "owner" : enemyOwner, "beastIndex" : enemyBeast})
+				if skillType == "Attack":
+					results = allEnemies
+				if skillType == "Effect":
+					applyOnWho = self.defaultData["Apply On Who"]
+					checkIfTheyAlreadyHaveIt = []
+					if applyOnWho == "Everyone":
+						checkIfTheyAlreadyHaveIt = allAllies + allEnemies
+					if applyOnWho == "Any Ally" or applyOnWho == "AllAllies":
+						checkIfTheyAlreadyHaveIt = allAllies
+					if applyOnWho == "Any Enemy" or applyOnWho == "All Enemies":
+						checkIfTheyAlreadyHaveIt = allEnemies
+					for beastInstance in checkIfTheyAlreadyHaveIt:
+						whichteam = beastInstance["whichTeam"]
+						owner = beastInstance["owner"]
+						beastIndex = beastInstance["beastIndex"]
+						if self.name not in allBeasts[whichTeam][owner][beastIndex].data["stats"]["CurrentEffects"]:
+							results.append(beastInstance)
+				if skillType == "Healing":
+					for ally in allAllies:
+						if allBeasts[myTeamName].beastInstances[ally["owner"]][ally["beastIndex"]].getCurrentLifeAsAPercentage() < 90:
+							results.append(ally)
+				return results		
+		class BeastInstance():
+			def __init__(self, data):
+				self.data = data
+			def getCurrentLifeAsAPercentage(self):
+				currentLife = self.data["stats"]["LifeCurrent"]
+				totalLife = self.data["stats"]["LifeTotal"]
+				return currentLife / totalLife * 100
+			def __str__(self):
+				return str(self.data)
+		class EffectInstance():
+			def __init__(self,unique_id, stats):
+				self.unique_id = unique_id
 				self.stats = stats
-				self.skills = skills
 	class CurrentMap():
 		def __init__(self, data):
 			self.startingData = data
@@ -254,7 +448,7 @@ class GameEngine():
 							if GameEngine.Combat.combatantData[combatant][f"Beast{x}"] != "NONE":
 								currentTeamComp[combatant][f"{x}"] = {}
 								currentTeamComp[combatant][f"{x}"]["name"] = GameEngine.Combat.combatantData[combatant][f"Beast{x}"]
-								currentTeamComp[combatant][f"{x}"]["skills"] = GameEngine.Combat.combatantData[combatant][f"Beast{x}Skills"]
+								currentTeamComp[combatant][f"{x}"]["skills"] = [x for x in GameEngine.Combat.combatantData[combatant][f"Beast{x}Skills"].split(",") if len(x) > 0]
 					if team_name == "allies":
 						which_position = ally_current_position
 					if team_name == "opponents":
@@ -336,18 +530,15 @@ class GameEngine():
 				x["position"].y += random.randint(10,25)
 			return False
 		def kickOffFadeInCombat(background_image_name):
-			Renderer.loadSprite(unique_id="CombatBackground", layer=Renderer.render_layer_lookup["CombatBackground"], source_folder=f"assets/images/objects/{background_image_name}", animated=True, animation_speed=0.01, animation_styles=["fadein","single",], animation_finished=False, direction="front",action="stand", scaling=[2,2], x=0.5, y=0.5, pivot="centre", opacity=0)
-			allies = GameEngine.Combat.currentBattle.allies.beastInstances
-			opponents = GameEngine.Combat.currentBattle.opponents.beastInstances
+			Renderer.loadSprite(unique_id="CombatBackground", layer=Renderer.render_layer_lookup["CombatBackground"], source_folder=f"assets/images/objects/{background_image_name}", animated=True, animation_speed=0.02, animation_styles=["fadein","single",], animation_finished=False, direction="front",action="stand", scaling=[2,2], x=0.5, y=0.5, pivot="centre", opacity=0)
+			allies = GameEngine.Combat.currentBattle.teams["allies"].beastInstances
+			opponents = GameEngine.Combat.currentBattle.teams["opponents"].beastInstances
 			to_load = [["allies", counter, x] for counter, x in enumerate(allies.keys())] + [["opponents", counter, x] for counter, x in enumerate(opponents.keys())]
 			for x in to_load:
 				team = x[0]
 				counter = x[1]
 				owner_name = x[2]
-				if team  == "allies":
-					first_out_name = GameEngine.Combat.currentBattle.allies.beastInstances[owner_name]["1"]["name"]
-				if team == "opponents":
-					first_out_name = GameEngine.Combat.currentBattle.opponents.beastInstances[owner_name]["1"]["name"]
+				first_out_name = GameEngine.Combat.currentBattle.teams[team].beastInstances[owner_name]["1"].data["name"]
 				GameEngine.ProcedureFactory.loadThisBeast(first_out_name,team, owner_name, "1", counter)
 		def loadThisBeast(beast_name, which_team, owner, beast_index, counter):
 			stat_bar_scaling = [0.75,0.75]
@@ -363,9 +554,9 @@ class GameEngine():
 			moveStatTextDirection = -0.08
 			moveStatTextAlignment = "left"
 			if which_team == "allies":
-				stats = GameEngine.Combat.currentBattle.allies.beastInstances[owner][beast_index]["stats"]
+				stats = GameEngine.Combat.currentBattle.teams["allies"].beastInstances[owner][beast_index].data["stats"]
 			else:
-				stats = GameEngine.Combat.currentBattle.opponents.beastInstances[owner][beast_index]["stats"]
+				stats = GameEngine.Combat.currentBattle.teams["opponents"].beastInstances[owner][beast_index].data["stats"]
 				moveStatTextDirection *=-1
 				moveStatTextAlignment = "right"
 			currentLife = stats["LifeCurrent"]
@@ -384,6 +575,18 @@ class GameEngine():
 			Renderer.loadText(unique_id=f"combatant_{which_team}_{beast_name}_{owner}_currentEnergy", layer=Renderer.text_layer_lookup["combat_text"], font_name = "default", font_size = 16, full_content = f"Energy: {currentEnergy}/{totalEnergy}", default_font_colour="white", dropshadow_colour = "black", animated=False, starting_content="", animation_speed=0, x = start_position[0] + counter * allied_y_gap + moveStatTextDirection,y=start_position[1] + 0.109,width=1,height=1, alignment = moveStatTextAlignment)
 			Renderer.loadText(unique_id=f"combatant_{which_team}_{beast_name}_{owner}_beastName", layer=Renderer.text_layer_lookup["combat_text"], font_name = "default", font_size = 16, full_content = f"{beast_name}", default_font_colour="white", dropshadow_colour = "black", animated=False, starting_content="", animation_speed=0, x = start_position[0] + counter * allied_y_gap,y=start_position[1] - 0.24,width=1,height=1, alignment = "centre")
 			Renderer.loadText(unique_id=f"combatant_{which_team}_{beast_name}_{owner}_beastElements", layer=Renderer.text_layer_lookup["combat_text"], font_name = "default", font_size = 16, full_content = f"{elements_as_one_word}", default_font_colour="white", dropshadow_colour = "black", animated=False, starting_content="", animation_speed=0, x = start_position[0] + counter * allied_y_gap,y=start_position[1] - 0.21,width=1,height=1, alignment = "centre")
+		def handleCombat():
+			if GameEngine.Combat.currentBattle.turnCounter == 0:
+				GameEngine.Combat.currentBattle.nextTurn()
+				GameEngine.Combat.currentBattle.showing_a_new_message = True
+			if GameEngine.Combat.currentBattle.showing_a_new_message:
+				if not Renderer.doesThisTextExist("CombatLog"):
+					Renderer.loadText(unique_id="CombatLog", layer=Renderer.text_layer_lookup["combat_text"], font_name = "default", font_size = 16, full_content = GameEngine.Combat.currentBattle.compileLatestMessages(), default_font_colour="white", dropshadow_colour = "black", animated=False, starting_content="", animation_speed=0, x = 0.02, y=0.03, width=0.8,height=1, alignment = "left")
+				messageShownForLongEnough = GameEngine.ProcedureFactory.arbitraryWait("CombatNewMessage",1)
+				if not messageShownForLongEnough:
+					return False
+				if messageShownForLongEnough:
+					pass
 		def loadCutscene(cutsceneName):
 			# add checks here if cutscene should depend on game state (npcs saying different things when criteria are met)
 			if cutsceneName not in GameEngine.ProcedureFactory.rawCutsceneData.keys():
@@ -413,6 +616,7 @@ class GameEngine():
 						eventList.append(GameEngine.Event("Wait", lambda : GameEngine.ProcedureFactory.arbitraryWait("combatStart", 0.75)))
 						eventList.append(GameEngine.Event("FadeInCombatBackground", lambda background_image_name = line["CombatBackground"]: GameEngine.ProcedureFactory.kickOffFadeInCombat(background_image_name) or True))
 						eventList.append(GameEngine.Event("HandleScreenShatter", lambda : GameEngine.ProcedureFactory.handleScreenShatter()))
+						eventList.append(GameEngine.Event("HandleCombat", lambda : GameEngine.ProcedureFactory.handleCombat()))
 						eventList.append(GameEngine.Event("WaitForUserInput", lambda : GameEngine.ProcedureFactory.waitForUserBeforeNextLine()))
 			return GameEngine.Procedure(eventList)
 		def getDebugProcedure():

@@ -255,12 +255,12 @@ class Renderer():
 			for y_coordinate in map_data["tiles"][x_coordinate].keys():
 				tile_types = map_data["tiles"][x_coordinate][y_coordinate].split(",")
 				objects = map_data["objects"][x_coordinate][y_coordinate].split(",")
+				world_position = [x_coordinate * tile_width + tile_width / 2,y_coordinate * tile_height + tile_height / 2]
+				screen_position = Renderer.worldToScreen(world_position,camera_position)
 				for counter, tile_type in enumerate(tile_types):
 					current_layer = tile_layer_start + counter
 					image_source_folder = f"assets/images/tiles/{tile_type}"
 					tile_id = f"current_map_tile_{counter}_{tile_type}_{x_coordinate}_{y_coordinate}"
-					world_position = [x_coordinate * tile_width + tile_width / 2,y_coordinate * tile_height + tile_height / 2]
-					screen_position = Renderer.worldToScreen(world_position,camera_position)
 					if current_layer not in Renderer.spriteLayers.keys() or tile_id not in Renderer.spriteLayers[current_layer].keys():
 						Renderer.loadSprite(unique_id=tile_id, layer=current_layer,source_folder=image_source_folder,animated=True,animation_speed=1,animation_styles=["loop","bounce","slightlyrandomtiming"],animation_finished=False,direction="front", action="stand",scaling=[1,1],x=screen_position[0], y=screen_position[1], pivot="centre", opacity=255)
 					else:
@@ -339,6 +339,7 @@ class Renderer():
 			"green" : (0,255,0),
 			"blue" : (0,0,255),
 			"elegantGreen" : (129,168,114),
+			"combatHighlight" : (236,233,0),
 		}
 		Renderer.render_layer_lookup = {
 			"tiles" : 0,
